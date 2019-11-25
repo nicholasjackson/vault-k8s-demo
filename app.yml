@@ -1,0 +1,84 @@
+# Create the config map for agent and consul template config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  creationTimestamp: 2016-02-18T19:14:38Z
+  name: vault-config
+  namespace: default
+data:
+  # example of a complex property defined using --from-file
+  template.ctmpl: |-
+    {
+      api: {
+        {{ with secret "secret/app_a" }}
+        username: "{{ .Data.data.username }}"
+        password: "{{ .Data.data.password }}"{{ end }}
+      }
+    }
+  agent-config.hcl: |-
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role = "app-a"
+        }
+      }
+    }
+
+    cache {
+      use_auto_auth_token = true
+    }
+
+    listener "tcp" {
+      address = "127.0.0.1:8200"
+      tls_disable = true
+    }
+
+    vault {
+      address = "http://vault:8200"
+    }
+
+    template {
+      source      = "/etc/vault/template.ctmpl"
+      destination = "/etc/secrets/secrets.json"
+    }
+
+# Create a service account to use for auth
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-a
+automountServiceAccountToken: true
+
+# Pod spec to use agent and template
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-demo
+spec:
+  serviceAccountName: app-a
+  containers:
+  - name: vault-agent
+    image: vault:1.3.0
+    command: ["vault"]
+    args: ["agent", "-config=/etc/vault/agent-config.hcl"]
+    volumeMounts:
+    - name: config-volume-agent
+      mountPath: /etc/vault
+      readOnly: true
+    - name: secrets
+      mountPath: /etc/secrets
+  volumes:
+  - name: secrets
+    emptyDir: {}
+  - name: config-volume-agent
+    configMap:
+      name: vault-config
+      items:
+      - key: agent-config.hcl
+        path: agent-config.hcl
+      - key: template.ctmpl
+        path: template.ctmpl
